@@ -6,3 +6,5 @@
 """
 
 from replay.experimental.scenarios.obp_wrapper.replay_offline import OBPOfflinePolicyLearner
+from replay.experimental.scenarios.obp_wrapper.MIPS import MIPS
+from replay.experimental.scenarios.obp_wrapper.dataset import ModifiedOpenBanditDataset
