@@ -27,6 +27,8 @@ from typing import Union
 
 import rs_datasets
 from replay.experimental.preprocessing.data_preparator import Indexer, DataPreparator
+from replay.splitters import TimeSplitter
+from replay.utils.spark_utils import convert2spark
 from pyspark.sql import functions as sf, types as st
 from pyspark.sql.types import IntegerType
 
@@ -74,16 +76,13 @@ class MovielensBanditDataset(BaseRealBanditDataset):
     dataset: rs_datasets.movielens.MovieLens
 
     def __post_init__(self) -> None:
-
-        # self.data: pd.DataFrame
-
         self.load_raw_data()
         self.pre_process()
 
     @property
     def n_rounds(self) -> int:
         """Size of the logged bandit data."""
-        return self.data.shape[0]
+        return self.context.shape[0]
 
     @property
     def n_actions(self) -> int:
@@ -122,55 +121,38 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         return bandit_feedback_test["reward"].mean()
 
     def load_raw_data(self) -> None:
-        """Load raw open bandit dataset."""
-
 
         preparator = DataPreparator()
 
+        #load logs
         log = preparator.transform(columns_mapping={'user_id': 'user_id',
-                                      'item_id': 'item_id',
-                                      'relevance': 'rating',
-                                      'timestamp': 'timestamp'
-                                     }, data=self.dataset.ratings.iloc[:5000])
-        
-        only_positives_log = log.filter(sf.col('relevance') >= 3).withColumn('relevance', sf.lit(1))
-
-        only_negatives_log = log.filter(sf.col('relevance') < 3).withColumn('relevance', sf.lit(0.))
-
-        log = (only_positives_log.union(only_negatives_log))
-
-
+                                                    'item_id': 'item_id',
+                                                    'relevance': 'rating',
+                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:5000])
 
         indexer = Indexer(user_col='user_id', item_col='item_id')
-
         indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
+        log = indexer.transform(df=log).toPandas()
+        log['relevance'] = log['relevance'].apply(lambda x: int(x>=3))
+        self.log = convert2spark(log)
 
-        self.data = indexer.transform(df=log).toPandas()
+        self.reward = np.array(log['relevance'].tolist())
+        self.action = np.array(log['item_idx'].tolist())
+        self.position = np.zeros(log.shape[0]).astype(int)
 
-        self.action = np.array(self.data['item_idx'].tolist())
-
-        self.position = np.zeros(self.data.shape[0]).astype(int)
-
-
+        #load item features and action_context
         item_features_original = preparator.transform(columns_mapping={'item_id': 'item_id'}, data=self.dataset.items)
         item_features = indexer.transform(df=item_features_original)
-        year = item_features.withColumn('year', sf.substring(sf.col('title'), -5, 4).astype(st.IntegerType())).select('item_idx', 'year')
         genres = (item_features.select("item_idx", sf.split("genres", "\|").alias("genres")))
         genres_list = (genres.select(sf.explode("genres").alias("genre")).distinct().filter('genre <> "(no genres listed)"').toPandas()["genre"].tolist())
         item_features = genres
         for genre in genres_list:
-            item_features = item_features.withColumn(
-                genre,
-                sf.array_contains(sf.col("genres"), genre).astype(IntegerType())
-            )
-        item_features = item_features.drop("genres").cache().toPandas()
-        # item_features = item_features.join(year, on='item_idx', how='inner')
-        # item_features.cache()
+            item_features = item_features.withColumn(genre, sf.array_contains(sf.col("genres"), genre).astype(IntegerType()))
 
-        # item_features = pd.concat([item_features.drop("year").toPandas(), pd.get_dummies(item_features.toPandas().year)], axis = 1)
-        self.action_context = item_features.drop(columns=['item_idx'],).to_numpy()
+        self.item_features = item_features.drop("genres").cache()
+        self.action_context = self.item_features.toPandas().drop(columns=['item_idx'],).to_numpy()
 
-
+        #load user features and context
         user_features_original = preparator.transform(columns_mapping={'user_id': 'user_id'}, data=self.dataset.users)
         user_features = indexer.transform(df=user_features_original)
         user_features = user_features.toPandas()
@@ -186,55 +168,23 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         myEncoder = OneHotEncoder(sparse=False, handle_unknown='ignore')
         myEncoder.fit(user_features[columnsToEncode])
 
-        user_df = pd.concat([user_features.drop(columnsToEncode, 1), pd.DataFrame(myEncoder.transform(user_features[columnsToEncode]), 
+        self.user_features = pd.concat([user_features.drop(columnsToEncode, 1), pd.DataFrame(myEncoder.transform(user_features[columnsToEncode]), 
                                                 columns = myEncoder.get_feature_names(columnsToEncode))], axis=1).reindex()
-
-        user_features = user_df.drop(columns=['user_idx'],).to_numpy()
-        user_idxs = self.data['user_idx'].to_numpy()
-
-        self.context = user_features[user_idxs]
-        print(self.action.shape)
-        print(self.context.shape)
-
-        self.data.sort_values("timestamp", inplace=True)
-        self.reward = np.array(self.data['relevance'].tolist())
+        self.context = self.user_features.drop(columns=['user_idx'],).to_numpy()[log['user_idx'].to_numpy()]
+        self.user_features = convert2spark(self.user_features)
 
     def pre_process(self) -> None:
-        """Preprocess raw open bandit dataset.
 
-        Note
-        -----
-        This is the default feature engineering and please override this method to
-        implement your own preprocessing.
-        see https://github.com/st-tech/zr-obp/blob/master/examples/examples_with_obd/custom_dataset.py for example.
-
-        """
-
-        model = LogisticRegression(max_iter=100, random_state=12345, n_jobs=-1)
+        self.model = LogisticRegression(max_iter=100, random_state=12345, n_jobs=-1)
         print('fit started')
-        model.fit(self.context, self.action)
+        self.model.fit(self.context, self.action)
         print('predict started')
 
         self.pscore = []
         for i in tqdm(range(self.n_rounds)):
-            self.pscore.append(model.predict_proba([self.context[i]])[0][self.action[i]])
+            self.pscore.append(self.model.predict_proba([self.context[i]])[0][self.action[i]])
 
         self.pscore = np.array(self.pscore)
-
-
-
-
-        # user_cols = self.data.columns.str.contains("user_feature")
-        # self.context = pd.get_dummies(
-        #     self.data.loc[:, user_cols], drop_first=True
-        # ).values
-        # item_feature_0 = self.item_context["item_feature_0"].to_frame()
-        # item_feature_cat = self.item_context.drop(
-        #     columns=["item_id", "item_feature_0"], axis=1
-        # ).apply(LabelEncoder().fit_transform)
-        # self.action_context = pd.concat(
-        #     objs=[item_feature_cat, item_feature_0], axis=1
-        # ).values
 
     def obtain_batch_bandit_feedback(
         self, test_size: float = 0.3, is_timeseries_split: bool = False
@@ -253,8 +203,23 @@ class MovielensBanditDataset(BaseRealBanditDataset):
                 min_val=0.0,
                 max_val=1.0,
             )
-            n_rounds_train = np.int32(self.n_rounds * (1.0 - test_size))
+
+            train_spl = TimeSplitter(
+                time_threshold=test_size,
+                drop_cold_items=True,
+                drop_cold_users=True,
+                query_column="user_idx",
+                item_column="item_idx",
+            )
+
+            train_log, test_log = train_spl.split(self.log)
+
+
+            n_rounds_train = train_log.count()
             bandit_feedback_train = dict(
+                log=train_log,
+                item_features=self.item_features,
+                user_features=self.user_features,
                 n_rounds=n_rounds_train,
                 n_actions=self.n_actions,
                 action=self.action[:n_rounds_train],
@@ -264,19 +229,36 @@ class MovielensBanditDataset(BaseRealBanditDataset):
                 context=self.context[:n_rounds_train],
                 action_context=self.action_context,
             )
+
+            test_log = test_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
+            test_action = np.array(test_log['item_idx'].tolist())
+            test_reward = np.array(test_log['relevance'].tolist())
+            test_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[test_log['user_idx'].to_numpy()]
+            test_pscore = []
+            for i in tqdm(range(test_log.shape[0])):
+                test_pscore.append(self.model.predict_proba([test_context[i]])[0][test_action[i]])
+            test_position = np.zeros(test_log.shape[0]).astype(int)
+
+            test_pscore = np.array(test_pscore)
+
+
             bandit_feedback_test = dict(
-                n_rounds=(self.n_rounds - n_rounds_train),
+                log=convert2spark(test_log),
+                item_features=self.item_features,
+                user_features=self.user_features,
+                n_rounds=test_log.shape[0],
                 n_actions=self.n_actions,
-                action=self.action[n_rounds_train:],
-                position=self.position[n_rounds_train:],
-                reward=self.reward[n_rounds_train:],
-                pscore=self.pscore[n_rounds_train:],
-                context=self.context[n_rounds_train:],
+                action=test_action,
+                position=test_position,
+                reward=test_reward,
+                pscore=test_pscore,
+                context=test_context,
                 action_context=self.action_context,
             )
             return bandit_feedback_train, bandit_feedback_test
         else:
             return dict(
+                log=self.log,
                 n_rounds=self.n_rounds,
                 n_actions=self.n_actions,
                 action=self.action,

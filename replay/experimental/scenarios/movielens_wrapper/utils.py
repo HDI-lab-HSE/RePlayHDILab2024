@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 from obp.ope import RegressionModel
 from sklearn.linear_model import LogisticRegression
+from replay.utils.spark_utils import convert2spark
 
 
 def get_est_rewards_by_reg(n_actions, len_list, bandit_feedback_train, bandit_feedback_test):
@@ -60,6 +61,9 @@ def bandit_subset(borders: List[int], bandit_feedback: Dict[str, np.ndarray]) ->
         "pscore": bandit_feedback["pscore"][left:right],
         "context": bandit_feedback["context"][left:right],
         "action_context": bandit_feedback["action_context"][left:right],
+        "user_features": bandit_feedback["user_features"],
+        "item_features": bandit_feedback["item_features"],
+        "log": convert2spark(bandit_feedback["log"].toPandas().iloc[left:right]),
     }
 
 
