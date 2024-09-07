@@ -20,7 +20,6 @@ def get_est_rewards_by_reg(n_actions, len_list, bandit_feedback_train, bandit_fe
         context=bandit_feedback_train["context"],
         action=bandit_feedback_train["action"],
         reward=bandit_feedback_train["reward"],
-        position=bandit_feedback_train["position"],
         pscore=bandit_feedback_train["pscore"],
     )
 

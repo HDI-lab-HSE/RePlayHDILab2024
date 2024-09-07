@@ -18,7 +18,14 @@ from replay.data import Dataset, FeatureHint, FeatureInfo, FeatureSchema, Featur
 from replay.experimental.scenarios.obp_wrapper.obp_optuna_objective import OBPObjective
 from replay.experimental.scenarios.obp_wrapper.utils import split_bandit_feedback
 from replay.models.base_rec import BaseRecommender
-from replay.utils.spark_utils import convert2spark
+from replay.utils.spark_utils import convert2spark, get_top_k_recs, return_recs
+
+from replay.metrics import HitRate, NDCG
+from replay.models import UCB, Wilson, RandomRec, LinUCB
+
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
 
 
 def obp2df(action: np.ndarray, reward: np.ndarray, timestamp: np.ndarray) -> Optional[pd.DataFrame]:
@@ -102,6 +109,7 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
                 ),
             ]
         )
+        self.replay_model.can_predict_cold_queries = True 
 
     @property
     def logger(self) -> logging.Logger:
@@ -144,10 +152,10 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         if context is not None:
             user_features = convert2spark(context2df(context, np.arange(context.shape[0]), "user"))
+            
 
         if action_context is not None:
             self.item_features = convert2spark(context2df(action_context, np.arange(self.n_actions), "item"))
-
         dataset = Dataset(
             feature_schema=self.feature_schema,
             interactions=log,
@@ -175,8 +183,8 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         users = convert2spark(pd.DataFrame({"user_idx": np.arange(self.max_usr_id, self.max_usr_id + n_rounds)}))
         items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.n_actions)}))
-
-        self.max_usr_id += n_rounds
+        
+        
 
         dataset = Dataset(
             feature_schema=self.feature_schema,
@@ -185,10 +193,80 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             item_features=self.item_features,
             check_consistency=False,
         )
-
-        action_dist = self.replay_model._predict_proba(dataset, self.len_list, users, items, filter_seen_items=False)
+        if isinstance(self.replay_model, (LinUCB)) and  self.len_list == 1:
+            pred = self.replay_model._predict(dataset, self.len_list, users, items, filter_seen_items=False)
+            action_dist = np.zeros((n_rounds, self.n_actions,  self.len_list))
+            pred = pred.withColumn(
+                "Softmax_Score",
+                F.exp("rating") / F.sum(F.exp("rating")).over(Window.partitionBy("user_idx"))
+            )
+            #pred = pred.withColumn('user_idx_adjusted', pred['user_idx'] - self.max_usr_id)
+        
+            action_dist[pred.select('user_idx').toPandas().values -  self.max_usr_id, pred.select('item_idx').toPandas().values, 0] =  pred.select('Softmax_Score').toPandas().values
+        else:       
+            action_dist = self.replay_model._predict_proba(dataset, self.len_list, users, items, filter_seen_items=False)
+        self.max_usr_id += n_rounds
 
         return action_dist
+    
+    def predict_and_hit_rate(self, n_rounds: int = 1, all_actions: int= 80, context: np.ndarray = None, actions: np.ndarray = None, K: int = None):
+        """Predict best actions for new data.
+        Action set predicted by this `predict` method can contain duplicate items.
+        If a non-repetitive action set is needed, please use the `sample_action` method.
+
+        :context: Context vectors for new data.
+
+        :return: Action choices made by a classifier, which can contain duplicate items.
+            If a non-repetitive action set is needed, please use the `sample_action` method.
+        """
+
+        user_features = None
+        if context is not None:
+            user_features = convert2spark(
+                context2df(context, np.arange(self.max_usr_id, self.max_usr_id + n_rounds), "user")
+            )
+
+        users = convert2spark(pd.DataFrame({"user_idx": np.arange(self.max_usr_id, self.max_usr_id + n_rounds)}))
+        items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.n_actions)}))
+         
+        dataset = Dataset(
+            feature_schema=self.feature_schema,
+            interactions=self.log,
+            query_features=user_features,
+            item_features=self.item_features,
+            check_consistency=False,
+        )
+
+        predict = self.replay_model._predict(dataset, K, users, items, filter_seen_items=False)
+        predict = get_top_k_recs(predict, k=K, query_column=self.replay_model.query_column, rating_column=self.replay_model.rating_column).select(
+            self.replay_model.query_column, self.replay_model.item_column, self.replay_model.rating_column
+        )
+
+        predict = return_recs(predict, None).sort("user_idx")
+       
+        self.max_usr_id += n_rounds
+        
+        recommended_items = predict.select('item_idx').toPandas().values.reshape(-1,K)
+        holdout_items = actions
+        
+        hits_mask = recommended_items == holdout_items.reshape(-1, 1)
+
+        # HR calculation
+        hr = np.mean(hits_mask.any(axis=1))
+
+        # MRR calculation
+        hit_rank = np.where(hits_mask)[1] + 1.0
+        mrr = np.sum(1 / hit_rank) / n_rounds
+
+        #NDCG calculation
+        ndcg = np.sum(1 / np.log2(hit_rank + 1.)) / n_rounds
+
+        #COV calculation
+        cov = np.unique(recommended_items).size / all_actions
+
+        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'ndcg@{K}': ndcg, f'cov@{K}': cov}
+
+
 
     def optimize(
         self,
@@ -219,7 +297,6 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         :return: Dictionary of parameter names with optimal value of corresponding parameter.
         """
-
         bandit_feedback_train, bandit_feedback_val = split_bandit_feedback(bandit_feedback, val_size)
 
         if self.replay_model._search_space is None:
