@@ -26,7 +26,7 @@ from replay.models import UCB, Wilson, RandomRec, LinUCB
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from replay.utils import PYSPARK_AVAILABLE, SparkDataFrame
-
+from pyspark.sql.functions import col,lit
 
 
 def obp2df(action: np.ndarray, reward: np.ndarray, timestamp: np.ndarray) -> Optional[pd.DataFrame]:
@@ -164,14 +164,48 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         if isinstance(self.replay_model, (LinUCB)) and  self.len_list == 1:
             pred = self.replay_model._predict(dataset, self.len_list, users, items, filter_seen_items=False)
+            # pred.show(100)
             action_dist = np.zeros((n_rounds, self.n_actions,  self.len_list))
             pred = pred.withColumn(
                 "Softmax_Score",
                 F.exp("relevance") / F.sum(F.exp("relevance")).over(Window.partitionBy("user_idx"))
-            )
-            #pred = pred.withColumn('user_idx_adjusted', pred['user_idx'] - self.max_usr_id)
+            ).cache()
+            pred.show(100)
+
+
+            pos1 = pred.toPandas().drop_duplicates(subset=["user_idx"], keep='first')['user_idx'].tolist()
+            positions1 = np.argsort(pos1)
+            pos2 = users.toPandas()['user_idx'].tolist()
+            positions2 = np.argsort(pos2)
+
+            arr = {}
+            for i in range(len(pos1)):
+                arr[pos1[positions1[i]]] = i
+
+            print(pos1)
+            print(pos2)
+            # print(positions1)
+            # print(positions2)
+            # print(arr)
+            # print(arr2)
+
+            pred.show(100)
+
+            rearranged_user_idx = pred.toPandas()['user_idx'].tolist()
+            for i in range(len(rearranged_user_idx)):
+                rearranged_user_idx[i] = positions2[arr[rearranged_user_idx[i]]]
+
+            print(rearranged_user_idx)
+
+            pred = pred.toPandas()
+            pred['new_idx'] = rearranged_user_idx
+            pred = convert2spark(pred)
+
+            pred.show(100)
+
+            print(self.n_actions)
         
-            action_dist[pred.select('user_idx').toPandas().values -  self.max_usr_id, pred.select('item_idx').toPandas().values, 0] =  pred.select('Softmax_Score').toPandas().values
+            action_dist[pred.select('new_idx').toPandas().values, pred.select('item_idx').toPandas().values, 0] =  pred.select('Softmax_Score').toPandas().values
         else:       
             action_dist = self.replay_model._predict_proba(dataset, self.len_list, users, items, filter_seen_items=False)
         self.max_usr_id += n_rounds

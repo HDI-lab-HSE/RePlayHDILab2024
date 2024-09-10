@@ -87,7 +87,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
     @property
     def n_actions(self) -> int:
         """Number of actions."""
-        return int(self.action.max() + 1)
+        return self.item_features.count()
 
     @property
     def dim_context(self) -> int:
@@ -128,7 +128,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         log = preparator.transform(columns_mapping={'user_id': 'user_id',
                                                     'item_id': 'item_id',
                                                     'relevance': 'rating',
-                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:5000])
+                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:50000])
 
         indexer = Indexer(user_col='user_id', item_col='item_id')
         indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
