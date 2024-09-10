@@ -33,7 +33,12 @@ from pyspark.sql import functions as sf, types as st
 from pyspark.sql.types import IntegerType
 
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 
@@ -128,7 +133,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         log = preparator.transform(columns_mapping={'user_id': 'user_id',
                                                     'item_id': 'item_id',
                                                     'relevance': 'rating',
-                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:50000])
+                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings)
 
         indexer = Indexer(user_col='user_id', item_col='item_id')
         indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
@@ -175,8 +180,9 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
     def pre_process(self) -> None:
 
-        self.model = LogisticRegression(max_iter=100, random_state=12345, n_jobs=-1)
+        self.model = SGDClassifier(loss='log', max_iter=100, random_state=12345, n_jobs=-1)
         print('fit started')
+        # print(self.context.shape, self.action.shape)
         self.model.fit(self.context, self.action)
         print('predict started')
 
