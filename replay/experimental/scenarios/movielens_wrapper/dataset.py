@@ -236,7 +236,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
                 action_context=self.action_context,
             )
 
-            test_log = test_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
+            # test_log = test_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
+            test_log = test_log.toPandas()
             test_action = np.array(test_log['item_idx'].tolist())
             test_reward = np.array(test_log['relevance'].tolist())
             test_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[test_log['user_idx'].to_numpy()]
