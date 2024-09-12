@@ -31,6 +31,8 @@ from replay.splitters import TimeSplitter
 from replay.utils.spark_utils import convert2spark
 from pyspark.sql import functions as sf, types as st
 from pyspark.sql.types import IntegerType
+import pickle
+
 
 
 from sklearn.linear_model import LogisticRegression, SGDClassifier
@@ -40,6 +42,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import os
 
 
 class BaseBanditDataset(metaclass=ABCMeta):
@@ -133,7 +136,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         log = preparator.transform(columns_mapping={'user_id': 'user_id',
                                                     'item_id': 'item_id',
                                                     'relevance': 'rating',
-                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings)
+                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:100000])
 
         indexer = Indexer(user_col='user_id', item_col='item_id')
         indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
@@ -179,13 +182,18 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         self.user_features = convert2spark(self.user_features)
 
     def pre_process(self) -> None:
+        if not os.path.isfile('model.pkl'):
+            self.model = SGDClassifier(loss='log', max_iter=100, random_state=12345, n_jobs=-1)
+            print('fit started')
+            self.model.fit(self.context, self.action)
+            with open('model.pkl','wb') as f:
+                pickle.dump(self.model,f)
+        else:
+            print('loading pretrained model')
+            with open('model.pkl', 'rb') as f:
+                self.model = pickle.load(f)
 
-        self.model = SGDClassifier(loss='log', max_iter=100, random_state=12345, n_jobs=-1)
-        print('fit started')
-        # print(self.context.shape, self.action.shape)
-        self.model.fit(self.context, self.action)
         print('predict started')
-
         self.pscore = []
         for i in tqdm(range(self.n_rounds)):
             self.pscore.append(self.model.predict_proba([self.context[i]])[0][self.action[i]])
@@ -212,8 +220,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
             train_spl = TimeSplitter(
                 time_threshold=test_size,
-                drop_cold_items=True,
-                drop_cold_users=True,
+                drop_cold_items=False,
+                drop_cold_users=False,
                 query_column="user_idx",
                 item_column="item_idx",
             )
@@ -236,7 +244,6 @@ class MovielensBanditDataset(BaseRealBanditDataset):
                 action_context=self.action_context,
             )
 
-            # test_log = test_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
             test_log = test_log.toPandas()
             test_action = np.array(test_log['item_idx'].tolist())
             test_reward = np.array(test_log['relevance'].tolist())

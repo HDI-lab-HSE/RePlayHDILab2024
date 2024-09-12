@@ -164,27 +164,23 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         if isinstance(self.replay_model, (LinUCB)) and  self.len_list == 1:
             pred = self.replay_model._predict(dataset, self.len_list, users, items, filter_seen_items=False)
-            # pred.show(100)
             action_dist = np.zeros((n_rounds, self.n_actions,  self.len_list))
             pred = pred.withColumn(
                 "Softmax_Score",
                 F.exp("relevance") / F.sum(F.exp("relevance")).over(Window.partitionBy("user_idx"))
             ).cache()
 
-            pos1 = pred.toPandas().drop_duplicates(subset=["user_idx"], keep='first')['user_idx'].tolist()
-            positions1 = np.argsort(pos1)
-            pos2 = users.toPandas()['user_idx'].tolist()
-            positions2 = np.argsort(pos2)
+            users_list = users.toPandas()['user_idx'].tolist()
 
-            arr = {}
-            for i in range(len(pos1)):
-                arr[pos1[positions1[i]]] = i
-
-            rearranged_user_idx = pred.toPandas()['user_idx'].tolist()
-            for i in range(len(rearranged_user_idx)):
-                rearranged_user_idx[i] = positions2[arr[rearranged_user_idx[i]]]
+            user2ind = {}
+            for i in range(len(users_list)):
+                user2ind[users_list[i]] = i
 
             pred = pred.toPandas()
+            rearranged_user_idx = pred['user_idx'].tolist()
+            for i in range(len(rearranged_user_idx)):
+                rearranged_user_idx[i] = user2ind[rearranged_user_idx[i]]
+
             pred['new_idx'] = rearranged_user_idx
             pred = convert2spark(pred)
         
