@@ -27,6 +27,8 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from replay.utils import PYSPARK_AVAILABLE, SparkDataFrame
 from pyspark.sql.functions import col,lit
+from pyspark.sql import functions as sf
+from tqdm import tqdm
 
 
 def obp2df(action: np.ndarray, reward: np.ndarray, timestamp: np.ndarray) -> Optional[pd.DataFrame]:
@@ -78,7 +80,6 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
     replay_model: Optional[BaseRecommender] = None
     log: Optional[DataFrame] = None
-    max_usr_id: int = 0
     item_features: DataFrame = None
     _study = None
     _logger: Optional[logging.Logger] = None
@@ -140,6 +141,13 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         )
 
         self.replay_model._fit_wrap(dataset)
+        
+        self.used_actions = [[] for _ in range(self.user_features.count())]
+        
+        users = self.log.toPandas()['user_idx'].tolist()
+        actions = self.log.toPandas()['item_idx'].tolist()
+        for i in range(len(users)):
+            self.used_actions[users[i]].append(actions[i])
 
     def predict(self, n_rounds: int = 1, users: SparkDataFrame = None) -> np.ndarray:
         """Predict best actions for new data.
@@ -162,9 +170,9 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             check_consistency=False,
         )
 
-        if isinstance(self.replay_model, (LinUCB)) and  self.len_list == 1:
-            pred = self.replay_model._predict(dataset, self.len_list, users, items, filter_seen_items=False)
-            action_dist = np.zeros((n_rounds, self.n_actions,  self.len_list))
+        if isinstance(self.replay_model, (LinUCB)):
+            pred = self.replay_model._predict(dataset, self.n_actions, users, items, filter_seen_items=False)
+            action_dist = np.zeros((n_rounds, self.n_actions, 1))
             pred = pred.withColumn(
                 "Softmax_Score",
                 F.exp("relevance") / F.sum(F.exp("relevance")).over(Window.partitionBy("user_idx"))
@@ -186,68 +194,94 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         
             action_dist[pred.select('new_idx').toPandas().values, pred.select('item_idx').toPandas().values, 0] =  pred.select('Softmax_Score').toPandas().values
         else:       
-            action_dist = self.replay_model._predict_proba(dataset, self.len_list, users, items, filter_seen_items=False)
-        self.max_usr_id += n_rounds
+            action_dist = self.replay_model._predict_proba(dataset, 1, users, items, filter_seen_items=False)
 
         return action_dist
-    
-    def predict_and_hit_rate(self, n_rounds: int = 1, all_actions: int= 80, context: np.ndarray = None, actions: np.ndarray = None, K: int = None):
-        """Predict best actions for new data.
-        Action set predicted by this `predict` method can contain duplicate items.
-        If a non-repetitive action set is needed, please use the `sample_action` method.
 
-        :context: Context vectors for new data.
 
-        :return: Action choices made by a classifier, which can contain duplicate items.
-            If a non-repetitive action set is needed, please use the `sample_action` method.
-        """
+    def predict_and_evaluate(self, bandit_feedback_test, K: int = None):
 
-        user_features = None
-        if context is not None:
-            user_features = convert2spark(
-                context2df(context, np.arange(self.max_usr_id, self.max_usr_id + n_rounds), "user")
-            )
-
-        users = convert2spark(pd.DataFrame({"user_idx": np.arange(self.max_usr_id, self.max_usr_id + n_rounds)}))
         items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.n_actions)}))
-         
+        
         dataset = Dataset(
             feature_schema=self.feature_schema,
             interactions=self.log,
-            query_features=user_features,
+            query_features=self.user_features,
             item_features=self.item_features,
             check_consistency=False,
         )
-
-        predict = self.replay_model._predict(dataset, K, users, items, filter_seen_items=False)
-        predict = get_top_k_recs(predict, k=K, query_column=self.replay_model.query_column, rating_column=self.replay_model.rating_column).select(
-            self.replay_model.query_column, self.replay_model.item_column, self.replay_model.rating_column
-        )
-
-        predict = return_recs(predict, None).sort("user_idx")
-       
-        self.max_usr_id += n_rounds
         
-        recommended_items = predict.select('item_idx').toPandas().values.reshape(-1,K)
-        holdout_items = actions
+        pos_log = bandit_feedback_test['log'].filter(sf.col('relevance') == 1)
         
-        hits_mask = recommended_items == holdout_items.reshape(-1, 1)
+        actions_list = np.array(pos_log.toPandas()['item_idx'].tolist())
+        users_list = np.array(pos_log.toPandas()['user_idx'].tolist())
+        ind2user = list(set(users_list))
+        
+        user2ind = {}
+        for i in range(len(ind2user)):
+            user2ind[ind2user[i]] = i
+             
+        pos_log_distinct = pos_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
+        
+        holdout_actions = np.zeros((pos_log_distinct.shape[0], self.n_actions))
+        for i in range(len(actions_list)):
+            holdout_actions[user2ind[users_list[i]]][actions_list[i]] = 1
+
+        ratings = np.zeros((pos_log_distinct.shape[0], self.n_actions))
+        
+        batch_size = 10
+        num_batchs = pos_log_distinct.shape[0] // batch_size
+        for i in tqdm(range(num_batchs+1)):
+            j = min((i+1)*batch_size, pos_log_distinct.shape[0])
+            if j == i*batch_size:
+                break
+            log_subset = pos_log_distinct.iloc[i*batch_size: j]
+            
+            users = convert2spark(log_subset).select('user_idx')
+            
+            pred = self.replay_model._predict(dataset, self.n_actions, users, items, filter_seen_items=False).toPandas()
+            rearranged_user_idx = pred['user_idx'].tolist()
+            for i in range(len(rearranged_user_idx)):
+                rearranged_user_idx[i] = user2ind[rearranged_user_idx[i]]
+
+            pred['new_idx'] = rearranged_user_idx
+        
+            ratings[rearranged_user_idx, pred['item_idx'].tolist()] =  pred['relevance'].tolist()
+            
+        for user in ind2user:
+            seen_actions = self.used_actions[user]
+            ratings[user2ind[user], seen_actions] = -np.inf
+            
+        
+        recommended_items = np.argsort(ratings, axis = 1)[:, :K]
+        
+        recommended_mask = np.zeros((pos_log_distinct.shape[0], self.n_actions))
+        for i in range(len(ind2user)):
+            recommended_mask[i][recommended_items[i]] = 1
+        
+        hits_mask = recommended_mask * holdout_actions
 
         # HR calculation
         hr = np.mean(hits_mask.any(axis=1))
 
         # MRR calculation
-        hit_rank = np.where(hits_mask)[1] + 1.0
-        mrr = np.sum(1 / hit_rank) / n_rounds
+        hits = np.argsort(hits_mask, axis = 1)[:, :K]
+        hit_rank = np.ones(len(ind2user))
+        for i in range(len(ind2user)):
+            for j, item in enumerate(recommended_items[i]):
+                if item in hits[i]:
+                    hit_rank[i] = j+1
+                    break
+        
+    
+        mrr = np.mean(hits_mask.any(axis=1)*(1/hit_rank))
 
         #NDCG calculation
-        ndcg = np.sum(1 / np.log2(hit_rank + 1.)) / n_rounds
-
+        ndcg = np.sum(1 / np.log2(hit_rank + 1.)) / len(ind2user)
         #COV calculation
-        cov = np.unique(recommended_items).size / all_actions
+        cov = np.unique(recommended_items).size / self.n_actions
 
-        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'ndcg@{K}': ndcg, f'cov@{K}': cov}
-
+        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'cov@{K}': cov}
 
 
     def optimize(

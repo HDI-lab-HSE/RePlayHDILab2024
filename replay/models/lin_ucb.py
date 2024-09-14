@@ -288,7 +288,9 @@ class LinUCB(HybridRecommender):
             for i in range(self._num_items):
                 rel_matrix[:,i] = self.eps * np.sqrt((usrs_feat.dot(self.linucb_arms[i].A_inv)*usrs_feat).sum(axis=1)) + usrs_feat @ self.linucb_arms[i].theta  
             #select top k predictions from each row (unsorted ones)
-            big_k = 20*k
+            big_k = min(20*k, items.count())
+            # print(big_k)
+            # print(np.argpartition(rel_matrix, -big_k, axis=1).shape)
             topk_indices = np.argpartition(rel_matrix, -big_k, axis=1)[:, -big_k:]
             rows_inds,_ = np.indices((num_user_pred, big_k))
             #result df
@@ -303,11 +305,9 @@ class LinUCB(HybridRecommender):
             feature_schema = dataset.feature_schema
             num_user_pred = users.count() #assuming it is a pyspark dataset
             users = users.toPandas()
-            items = items.toPandas()
             user_features = dataset.query_features.toPandas()
             item_features = dataset.item_features.toPandas()
             usr_idxs_list = users[feature_schema.query_id_column].values
-            itm_idxs_list = items[feature_schema.item_id_column].values
 
             if user_features is None:
                 raise ValueError("Can not make predict in the Lin UCB method")
@@ -335,6 +335,7 @@ class LinUCB(HybridRecommender):
 
             #select top k predictions from each row (unsorted ones)
             big_k = 20*k
+            # print(big_k)
             topk_indices = np.argpartition(rel_matrix, -big_k, axis=1)[:, -big_k:]
             rows_inds,_ = np.indices((num_user_pred, big_k))
             #result df
