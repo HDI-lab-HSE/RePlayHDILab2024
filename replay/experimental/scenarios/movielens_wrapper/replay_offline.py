@@ -265,23 +265,32 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         hr = np.mean(hits_mask.any(axis=1))
 
         # MRR calculation
-        hits = np.argsort(hits_mask, axis = 1)[:, :K]
         hit_rank = np.ones(len(ind2user))
         for i in range(len(ind2user)):
             for j, item in enumerate(recommended_items[i]):
-                if item in hits[i]:
+                if hits_mask[i][item]:
                     hit_rank[i] = j+1
                     break
-        
-    
+                
+                
         mrr = np.mean(hits_mask.any(axis=1)*(1/hit_rank))
-
+        
+        
+        interactions = [[] for _ in range(len(ind2user))]
+        for i in range(len(ind2user)):
+            for j, item in enumerate(recommended_items[i]):
+                interactions[i].append(holdout_actions[i][item])
+        interactions = np.array(interactions)
+        
+        log_ranks = np.log2(np.arange(1, K+1) + 1)
+        
         #NDCG calculation
-        ndcg = np.sum(1 / np.log2(hit_rank + 1.)) / len(ind2user)
+        ndcg = np.mean(np.sum(interactions/log_ranks, axis=1))
+        
         #COV calculation
         cov = np.unique(recommended_items).size / self.n_actions
 
-        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'cov@{K}': cov}
+        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'ndcg@{K}': ndcg, f'cov@{K}': cov}
 
 
     def optimize(
