@@ -253,7 +253,7 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             ratings[user2ind[user], seen_actions] = -np.inf
             
         
-        recommended_items = np.argsort(ratings, axis = 1)[:, :K]
+        recommended_items = np.argsort(-ratings, axis = 1)[:, :K]
         
         recommended_mask = np.zeros((pos_log_distinct.shape[0], self.n_actions))
         for i in range(len(ind2user)):

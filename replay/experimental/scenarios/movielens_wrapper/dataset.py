@@ -136,7 +136,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         log = preparator.transform(columns_mapping={'user_id': 'user_id',
                                                     'item_id': 'item_id',
                                                     'relevance': 'rating',
-                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings.iloc[:100000])
+                                                    'timestamp': 'timestamp'}, data=self.dataset.ratings)
 
         indexer = Indexer(user_col='user_id', item_col='item_id')
         indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
