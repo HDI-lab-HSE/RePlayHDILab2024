@@ -220,8 +220,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
             train_spl = TimeSplitter(
                 time_threshold=test_size,
-                drop_cold_items=False,
-                drop_cold_users=False,
+                drop_cold_items=True,
+                drop_cold_users=True,
                 query_column="user_idx",
                 item_column="item_idx",
             )

@@ -248,6 +248,7 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         
             ratings[rearranged_user_idx, pred['item_idx'].tolist()] =  pred['relevance'].tolist()
             
+            
         for user in ind2user:
             seen_actions = self.used_actions[user]
             ratings[user2ind[user], seen_actions] = -np.inf
@@ -276,6 +277,12 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         mrr = np.mean(hits_mask.any(axis=1)*(1/hit_rank))
         
         
+        
+        
+        
+        
+        
+        #NDCG calculation
         interactions = [[] for _ in range(len(ind2user))]
         for i in range(len(ind2user)):
             for j, item in enumerate(recommended_items[i]):
@@ -283,9 +290,25 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         interactions = np.array(interactions)
         
         log_ranks = np.log2(np.arange(1, K+1) + 1)
+        dcg = np.mean(np.sum(interactions/log_ranks, axis=1))
         
-        #NDCG calculation
-        ndcg = np.mean(np.sum(interactions/log_ranks, axis=1))
+        max_holdout = max(np.sum(holdout_actions, axis=1))
+        logs = np.log2(np.arange(1, max_holdout+1) + 1)
+        cum_sum_logs = np.cumsum(1/logs)
+        
+        
+        idcg = []
+        for i in range(len(ind2user)):
+            idcg.append(cum_sum_logs[int(holdout_actions[i].sum())-1])
+        idcg = np.array(idcg).mean()
+    
+        ndcg = dcg/idcg
+        
+        
+        
+        
+        
+        
         
         #COV calculation
         cov = np.unique(recommended_items).size / self.n_actions
