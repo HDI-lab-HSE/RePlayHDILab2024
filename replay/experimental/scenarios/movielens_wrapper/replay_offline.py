@@ -159,7 +159,7 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         :return: Action choices made by a classifier, which can contain duplicate items.
             If a non-repetitive action set is needed, please use the `sample_action` method.
         """
-        items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.n_actions)}))
+        items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.item_features.count())}))
         
 
         dataset = Dataset(
@@ -171,8 +171,8 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         )
 
         if isinstance(self.replay_model, (LinUCB)):
-            pred = self.replay_model._predict(dataset, self.n_actions, users, items, filter_seen_items=False)
-            action_dist = np.zeros((n_rounds, self.n_actions, 1))
+            pred = self.replay_model._predict(dataset, self.item_features.count(), users, items, filter_seen_items=False)
+            action_dist = np.zeros((n_rounds, self.item_features.count(), 1))
             pred = pred.withColumn(
                 "Softmax_Score",
                 F.exp("relevance") / F.sum(F.exp("relevance")).over(Window.partitionBy("user_idx"))
@@ -200,15 +200,15 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
 
     def predict_and_evaluate(self, bandit_feedback_test, K: int = None):
-
-        items = convert2spark(pd.DataFrame({"item_idx": np.arange(self.n_actions)}))
+        
+        items = convert2spark(pd.DataFrame({"item_idx": np.arange(bandit_feedback_test['item_features'].count())}))
         
         dataset = Dataset(
             feature_schema=self.feature_schema,
             interactions=self.log,
             query_features=self.user_features,
             item_features=self.item_features,
-            check_consistency=False,
+            check_consistency=True,
         )
         
         pos_log = bandit_feedback_test['log'].filter(sf.col('relevance') == 1)
@@ -243,12 +243,10 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             rearranged_user_idx = pred['user_idx'].tolist()
             for i in range(len(rearranged_user_idx)):
                 rearranged_user_idx[i] = user2ind[rearranged_user_idx[i]]
-
-            pred['new_idx'] = rearranged_user_idx
         
-            ratings[rearranged_user_idx, pred['item_idx'].tolist()] =  pred['relevance'].tolist()
+            ratings[rearranged_user_idx, pred['item_idx'].tolist()] = pred['relevance'].tolist()
             
-            
+        
         for user in ind2user:
             seen_actions = self.used_actions[user]
             ratings[user2ind[user], seen_actions] = -np.inf
@@ -277,11 +275,6 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         mrr = np.mean(hits_mask.any(axis=1)*(1/hit_rank))
         
         
-        
-        
-        
-        
-        
         #NDCG calculation
         interactions = [[] for _ in range(len(ind2user))]
         for i in range(len(ind2user)):
@@ -303,11 +296,6 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         idcg = np.array(idcg).mean()
     
         ndcg = dcg/idcg
-        
-        
-        
-        
-        
         
         
         #COV calculation

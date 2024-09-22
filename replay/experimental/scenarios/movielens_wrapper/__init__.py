@@ -6,5 +6,4 @@
 """
 
 from replay.experimental.scenarios.movielens_wrapper.replay_offline import OBPOfflinePolicyLearner
-from replay.experimental.scenarios.movielens_wrapper.MIPS import MIPS
 from replay.experimental.scenarios.movielens_wrapper.dataset import MovielensBanditDataset

@@ -199,6 +199,10 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             self.pscore.append(self.model.predict_proba([self.context[i]])[0][self.action[i]])
 
         self.pscore = np.array(self.pscore)
+        
+        self.log = self.log.toPandas()
+        self.log['pscore'] = self.pscore
+        self.log = convert2spark(self.log)
 
     def obtain_batch_bandit_feedback(
         self, test_size: float = 0.3, is_timeseries_split: bool = False
@@ -220,8 +224,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
             train_spl = TimeSplitter(
                 time_threshold=test_size,
-                drop_cold_items=True,
-                drop_cold_users=True,
+                drop_cold_items=False,
+                drop_cold_users=False,
                 query_column="user_idx",
                 item_column="item_idx",
             )
