@@ -284,16 +284,17 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
         
         log_ranks = np.log2(np.arange(1, K+1) + 1)
         dcg = np.mean(np.sum(interactions/log_ranks, axis=1))
+    
         
-        max_holdout = max(np.sum(holdout_actions, axis=1))
-        logs = np.log2(np.arange(1, max_holdout+1) + 1)
-        cum_sum_logs = np.cumsum(1/logs)
-        
-        
-        idcg = []
+        ideal_interactions = [[] for _ in range(len(ind2user))]
         for i in range(len(ind2user)):
-            idcg.append(cum_sum_logs[int(holdout_actions[i].sum())-1])
-        idcg = np.array(idcg).mean()
+            for j in range(K):
+                if j<K:
+                    ideal_interactions[i].append(1)
+                else:
+                    ideal_interactions[i].append(0)
+        ideal_interactions = np.array(ideal_interactions)
+        idcg = np.mean(np.sum(ideal_interactions/log_ranks, axis=1))
     
         ndcg = dcg/idcg
         
@@ -303,6 +304,91 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
 
         return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'ndcg@{K}': ndcg, f'cov@{K}': cov}
 
+
+    def predict_and_evaluate_new(self, bandit_feedback_test, K: int = None):
+        
+        items = convert2spark(pd.DataFrame({"item_idx": np.arange(bandit_feedback_test['item_features'].count())}))
+        
+        dataset = Dataset(
+            feature_schema=self.feature_schema,
+            interactions=self.log,
+            query_features=self.user_features,
+            item_features=self.item_features,
+            check_consistency=True,
+        )
+        
+        pos_log = bandit_feedback_test['log'].filter(sf.col('relevance') == 1)
+        
+        actions_list = np.array(pos_log.toPandas()['item_idx'].tolist())
+        users_list = np.array(pos_log.toPandas()['user_idx'].tolist())
+        ind2user = list(set(users_list))
+        
+        user2ind = {}
+        for i in range(len(ind2user)):
+            user2ind[ind2user[i]] = i
+             
+        pos_log_distinct = pos_log.toPandas().drop_duplicates(subset=["user_idx"], keep='first')
+        ratings = np.zeros((pos_log_distinct.shape[0], self.n_actions))
+        
+        batch_size = 10
+        num_batchs = pos_log_distinct.shape[0] // batch_size
+        for i in tqdm(range(num_batchs+1)):
+            j = min((i+1)*batch_size, pos_log_distinct.shape[0])
+            if j == i*batch_size:
+                break
+            log_subset = pos_log_distinct.iloc[i*batch_size: j]
+            
+            users = convert2spark(log_subset).select('user_idx')
+            
+            pred = self.replay_model._predict(dataset, self.n_actions, users, items, filter_seen_items=False).toPandas()
+            rearranged_user_idx = pred['user_idx'].tolist()
+            for i in range(len(rearranged_user_idx)):
+                rearranged_user_idx[i] = user2ind[rearranged_user_idx[i]]
+        
+            ratings[rearranged_user_idx, pred['item_idx'].tolist()] = pred['relevance'].tolist()
+            
+        for user in ind2user:
+            seen_actions = self.used_actions[user]
+            ratings[user2ind[user], seen_actions] = -np.inf
+            
+            
+        n_predicitions = np.zeros(len(ind2user))
+        n_hits = np.zeros(len(ind2user))
+        ranks_inv = np.zeros(len(ind2user))
+        log_ranks_inv = np.zeros(len(ind2user))
+        ideal_log_ranks_inv = np.zeros(len(ind2user))
+        
+        
+        
+        recommended_items_set = set()
+        
+        # HR, MRR, NDCG calculation
+        for row_ind in range(len(actions_list)):
+            user_ind = user2ind[users_list[row_ind]]
+            true_action = actions_list[row_ind]
+            recommended_items = np.argsort(-ratings[user_ind])[:K]
+            
+            recommended_items_set.update(recommended_items)
+            
+            n_predicitions[user_ind] += 1
+            if true_action in recommended_items:
+                n_hits[user_ind] += 1
+                ranks_inv[user_ind] += 1/(list(recommended_items).index(true_action)+1)
+                log_ranks_inv[user_ind] += 1/np.log2((list(recommended_items).index(true_action)+1)+1)
+                ideal_log_ranks_inv[user_ind] += 1
+                
+            ratings[user_ind][true_action] = -np.inf
+            
+        hr = (n_hits / n_predicitions).mean()
+        mrr = (ranks_inv / n_predicitions).mean()
+        dcg = (log_ranks_inv / n_predicitions).mean()
+        idcg = (ideal_log_ranks_inv / n_predicitions).mean()
+        ndcg = dcg/idcg
+        
+        cov = len(recommended_items_set) / self.n_actions
+        
+        return {f'hr@{K}': hr, f'mrr@{K}': mrr, f'ndcg@{K}': ndcg, f'cov@{K}': cov}
+        
 
     def optimize(
         self,
