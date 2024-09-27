@@ -52,6 +52,9 @@ class linucb_disjoint_arm():
         self.A += np.dot(usr_features.T, usr_features)
         self.A_inv = np.linalg.inv(self.A)
         # Update the parameter theta by the results  linear regression
+        # print(self.A.shape)
+        # print(usr_features.shape)
+        # print(relevances.shape)
         self.theta = np.linalg.lstsq(self.A, usr_features.T @ relevances, rcond = 1.0)[0]
         self.cond_number = np.linalg.cond(self.A) #this ome needed for deug only
 
@@ -220,13 +223,21 @@ class LinUCB(HybridRecommender):
         self._user_dim_size = user_features.shape[1] - 1
         self._item_dim_size = item_features.shape[1] - 1
         #now initialize an arm object for each potential arm instance
+        # print(item_features.shape[0])
+        # print(min(log[feature_schema.item_id_column].values), max(log[feature_schema.item_id_column].values))
         if self.regr_type == 'disjoint':
             self.linucb_arms = [linucb_disjoint_arm(arm_index = i, d = self._user_dim_size, eps = self.eps, alpha = self.alpha) for i in range(self._num_items)]
             #now we work with pandas
             for i in range(self._num_items):
                 B = log.loc[log[feature_schema.item_id_column] == i]
                 idxs_list = B[feature_schema.query_id_column].values
+                
+                assert len(idxs_list)==len(set(idxs_list))
                 rel_list = B[feature_schema.interactions_rating_column].values
+                
+                
+                # print(min(user_features[feature_schema.query_id_column].tolist()), max(user_features[feature_schema.query_id_column].tolist()))
+                # print(min(idxs_list), max(idxs_list), len(idxs_list), len(set(idxs_list)))
                 if not B.empty:
                     #if we have at least one user interacting with the hand i
                     cur_usrs = user_features.query(f"{feature_schema.query_id_column} in @idxs_list").drop(columns=[feature_schema.query_id_column])

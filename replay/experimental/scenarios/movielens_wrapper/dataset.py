@@ -193,16 +193,68 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             with open('model.pkl', 'rb') as f:
                 self.model = pickle.load(f)
 
-        print('predict started')
-        self.pscore = []
-        for i in tqdm(range(self.n_rounds)):
-            self.pscore.append(self.model.predict_proba([self.context[i]])[0][self.action[i]])
+        if not os.path.isfile('pscores.npy'):
+            print('predict started')
+            self.pscore = []
+            for i in tqdm(range(self.n_rounds)):
+                self.pscore.append(self.model.predict_proba([self.context[i]])[0][self.action[i]])
 
-        self.pscore = np.array(self.pscore)
+            np.save('pscores.npy', np.array(self.pscore))
+        self.pscore = np.load('pscores.npy')
+        
         
         self.log = self.log.toPandas()
         self.log['pscore'] = self.pscore
         self.log = convert2spark(self.log)
+        
+        
+    def sample_negatives(self, ratings):
+        items = list(self.log.toPandas()['item_idx'].unique())
+        ind2item = items
+        item2ind = {}
+        for ind, item in enumerate(items):
+            item2ind[item] = ind
+
+
+        users = list(ratings['user_idx'].unique())
+        ind2user = users
+        user2ind = {}
+        for ind, user in enumerate(users):
+            user2ind[user] = ind
+            
+
+        used_actions = np.zeros((len(users), len(items)))
+        for i in tqdm(range(ratings.shape[0])):
+            user_ind = user2ind[ratings.iloc[i]['user_idx']]
+            item_ind = item2ind[ratings.iloc[i]['item_idx']]
+            used_actions[user_ind][item_ind] = 1
+
+        negatives = {'user_idx': [], 'item_idx': [], 'relevance': [], 'timestamp': [], 'cnt': [], 'pscore': []}
+
+
+        timestamp = ratings.iloc[0]['timestamp']
+
+        negative_samples_max = 50
+        for user in tqdm(users):
+            user_ind = user2ind[user]
+            unused_actions_inds = np.where(used_actions[user_ind]==0)[0]
+            n_samples = min(len(unused_actions_inds), negative_samples_max)
+            
+            negatives_actions_inds = np.random.choice(unused_actions_inds, n_samples, replace=False)
+            
+            for negatives_actions_ind in negatives_actions_inds:
+                negatives['user_idx'].append(ind2user[user_ind])
+                negatives['item_idx'].append(ind2item[negatives_actions_ind])
+                negatives['relevance'].append(0)
+                negatives['timestamp'] = timestamp
+                negatives['cnt'].append(1)
+                negatives['pscore'].append(0)
+            
+        negative_ratings = pd.DataFrame.from_dict(negatives)
+
+        ratings = pd.concat([ratings, negative_ratings])
+        
+        return convert2spark(ratings)
 
     def obtain_batch_bandit_feedback(
         self, test_size: float = 0.3, is_timeseries_split: bool = False
@@ -231,7 +283,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             )
 
             train_log, test_log = train_spl.split(self.log)
-
+            
+            # train_log = self.sample_negatives(train_log.toPandas())
 
             n_rounds_train = train_log.count()
             bandit_feedback_train = dict(
@@ -252,12 +305,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             test_action = np.array(test_log['item_idx'].tolist())
             test_reward = np.array(test_log['relevance'].tolist())
             test_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[test_log['user_idx'].to_numpy()]
-            test_pscore = []
-            for i in tqdm(range(test_log.shape[0])):
-                test_pscore.append(self.model.predict_proba([test_context[i]])[0][test_action[i]])
+            test_pscore = np.array(test_log['pscore'].tolist())
             test_position = np.zeros(test_log.shape[0]).astype(int)
-
-            test_pscore = np.array(test_pscore)
 
 
             bandit_feedback_test = dict(

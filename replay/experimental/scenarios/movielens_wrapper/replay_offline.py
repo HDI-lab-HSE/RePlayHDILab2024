@@ -371,11 +371,11 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             recommended_items_set.update(recommended_items)
             
             n_predicitions[user_ind] += 1
+            ideal_log_ranks_inv[user_ind] += 1
             if true_action in recommended_items:
                 n_hits[user_ind] += 1
                 ranks_inv[user_ind] += 1/(list(recommended_items).index(true_action)+1)
                 log_ranks_inv[user_ind] += 1/np.log2((list(recommended_items).index(true_action)+1)+1)
-                ideal_log_ranks_inv[user_ind] += 1
                 
             ratings[user_ind][true_action] = -np.inf
             
