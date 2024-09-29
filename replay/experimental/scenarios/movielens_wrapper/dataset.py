@@ -208,7 +208,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         self.log = convert2spark(self.log)
         
         
-    def sample_negatives(self, ratings):
+    def sample_negatives(self, ratings, n_neg):
         items = list(self.log.toPandas()['item_idx'].unique())
         ind2item = items
         item2ind = {}
@@ -234,7 +234,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
         timestamp = ratings.iloc[0]['timestamp']
 
-        negative_samples_max = 50
+        negative_samples_max = n_neg
         for user in tqdm(users):
             user_ind = user2ind[user]
             unused_actions_inds = np.where(used_actions[user_ind]==0)[0]
@@ -257,7 +257,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         return convert2spark(ratings)
 
     def obtain_batch_bandit_feedback(
-        self, test_size: float = 0.3, is_timeseries_split: bool = False
+        self, test_size: float = 0.3, is_timeseries_split: bool = False, n_neg: int = 0
     ) -> Union[BanditFeedback, Tuple[BanditFeedback, BanditFeedback]]:
 
         if not isinstance(is_timeseries_split, bool):
@@ -284,7 +284,8 @@ class MovielensBanditDataset(BaseRealBanditDataset):
 
             train_log, test_log = train_spl.split(self.log)
             
-            # train_log = self.sample_negatives(train_log.toPandas())
+            if n_neg != 0:
+                train_log = self.sample_negatives(train_log.toPandas(), n_neg)
 
             n_rounds_train = train_log.count()
             bandit_feedback_train = dict(
@@ -302,6 +303,7 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             )
 
             test_log = test_log.toPandas()
+            test_log = test_log.sort_values(by=['timestamp'])
             test_action = np.array(test_log['item_idx'].tolist())
             test_reward = np.array(test_log['relevance'].tolist())
             test_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[test_log['user_idx'].to_numpy()]
