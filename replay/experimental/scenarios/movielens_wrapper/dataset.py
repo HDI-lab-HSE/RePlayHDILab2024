@@ -286,19 +286,25 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             
             if n_neg != 0:
                 train_log = self.sample_negatives(train_log.toPandas(), n_neg)
-
-            n_rounds_train = train_log.count()
+            
+            train_log = train_log.toPandas()
+            train_log = train_log.sort_values(by=['timestamp'])
+            train_action = np.array(train_log['item_idx'].tolist())
+            train_reward = np.array(train_log['relevance'].tolist())
+            train_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[train_log['user_idx'].to_numpy()]
+            train_pscore = np.array(train_log['pscore'].tolist())
+            train_position = np.zeros(train_log.shape[0]).astype(int)
             bandit_feedback_train = dict(
-                log=train_log,
+                log=convert2spark(train_log),
                 item_features=self.item_features,
                 user_features=self.user_features,
-                n_rounds=n_rounds_train,
+                n_rounds=train_log.shape[0],
                 n_actions=self.n_actions,
-                action=self.action[:n_rounds_train],
-                position=self.position[:n_rounds_train],
-                reward=self.reward[:n_rounds_train],
-                pscore=self.pscore[:n_rounds_train],
-                context=self.context[:n_rounds_train],
+                action=train_action,
+                position=train_position,
+                reward=train_reward,
+                pscore=train_pscore,
+                context=train_context,
                 action_context=self.action_context,
             )
 
@@ -309,8 +315,6 @@ class MovielensBanditDataset(BaseRealBanditDataset):
             test_context = self.user_features.toPandas().drop(columns=['user_idx'],).to_numpy()[test_log['user_idx'].to_numpy()]
             test_pscore = np.array(test_log['pscore'].tolist())
             test_position = np.zeros(test_log.shape[0]).astype(int)
-
-
             bandit_feedback_test = dict(
                 log=convert2spark(test_log),
                 item_features=self.item_features,
