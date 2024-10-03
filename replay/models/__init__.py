@@ -23,3 +23,4 @@ from .ucb import UCB
 from .wilson import Wilson
 from .word2vec import Word2VecRec
 from .lin_ucb import LinUCB
+from .lin_ts import LinTS
