@@ -15,13 +15,13 @@ from optuna.samplers import TPESampler
 from pyspark.sql import DataFrame
 
 from replay.data import Dataset, FeatureHint, FeatureInfo, FeatureSchema, FeatureType
-from replay.experimental.scenarios.obp_wrapper.obp_optuna_objective import OBPObjective
-from replay.experimental.scenarios.obp_wrapper.utils import split_bandit_feedback
+from replay.experimental.scenarios.movielens_wrapper.obp_optuna_objective import OBPObjective
+from replay.experimental.scenarios.movielens_wrapper.utils import split_bandit_feedback
 from replay.models.base_rec import BaseRecommender
 from replay.utils.spark_utils import convert2spark, get_top_k_recs, return_recs
 
 from replay.metrics import HitRate, NDCG
-from replay.models import UCB, Wilson, RandomRec, LinUCB
+from replay.models import UCB, Wilson, RandomRec, LinUCB, LinTS
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -170,7 +170,7 @@ class OBPOfflinePolicyLearner(BaseOfflinePolicyLearner):
             check_consistency=False,
         )
 
-        if isinstance(self.replay_model, (LinUCB)):
+        if isinstance(self.replay_model, (LinUCB, LinTS)):
             pred = self.replay_model._predict(dataset, self.item_features.count(), users, items, filter_seen_items=False)
             action_dist = np.zeros((n_rounds, self.item_features.count(), 1))
             pred = pred.withColumn(

@@ -71,6 +71,9 @@ class UCB(NonPersonalizedRecommender):
     # attributes which are needed for refit method
     full_count: int
     items_counts_aggr: SparkDataFrame
+    _search_space = {
+        "coef": {"type": "uniform", "args": [1e-6, 5]},
+    }
 
     def __init__(
         self,
@@ -124,9 +127,13 @@ class UCB(NonPersonalizedRecommender):
         :param new_study: keep searching with previous study or start a new study
         :return: dictionary with best parameters
         """
-        self.logger.warning(
-            "The UCB model has only exploration coefficient parameter, which cannot not be directly optimized"
-        )
+        return super().optimize(train_dataset,
+                                test_dataset,
+                                param_borders,
+                                criterion, 
+                                k,
+                                budget,
+                                new_study)
 
     def _fit(
         self,

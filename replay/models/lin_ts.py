@@ -78,7 +78,7 @@ class LinTS(HybridRecommender):
 
         self._study = None  # field required for proper optuna's optimization
         self._search_space = {
-            "eps": {"type": "uniform", "args": [-10.0, 10.0]},
+            "nu": {"type": "uniform", "args": [-10.0, 10.0]},
             "alpha": {"type": "uniform", "args": [0.001, 10.0]},
         }
 
