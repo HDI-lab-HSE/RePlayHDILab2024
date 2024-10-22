@@ -183,21 +183,21 @@ class MovielensBanditDataset(BaseRealBanditDataset):
         self.user_features = convert2spark(self.user_features)
 
     def pre_process(self) -> None:
-        if self.i == -1:
-            print(f'loading pretrained model {self.i}')
-            with open('model.pkl', 'rb') as f:
-                self.model = pickle.load(f)
-            self.pscore = np.load('pscores.npy')
-        else:
-            print(f'loading pretrained model {self.i}')
-            with open(f'./models/model_{self.i}.pkl', 'rb') as f:
-                self.model = pickle.load(f)
-            self.pscore = np.load(f'./models/pscores_{self.i}.npy')
+        # if self.i == -1:
+        #     print(f'loading pretrained model {self.i}')
+        #     with open('model.pkl', 'rb') as f:
+        #         self.model = pickle.load(f)
+        #     self.pscore = np.load('pscores.npy')
+        # else:
+        #     print(f'loading pretrained model {self.i}')
+        #     with open(f'./models/model_{self.i}.pkl', 'rb') as f:
+        #         self.model = pickle.load(f)
+        #     self.pscore = np.load(f'./models/pscores_{self.i}.npy')
             
-        self.log = self.log.toPandas()
-        self.log['pscore'] = self.pscore
-        self.log = convert2spark(self.log)
-        return
+        # self.log = self.log.toPandas()
+        # self.log['pscore'] = self.pscore
+        # self.log = convert2spark(self.log)
+        # return
         
         
         
