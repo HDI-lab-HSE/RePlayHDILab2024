@@ -7,4 +7,3 @@
 
 from replay.experimental.scenarios.movielens_wrapper.replay_offline import OBPOfflinePolicyLearner
 from replay.experimental.scenarios.movielens_wrapper.dataset import MovielensBanditDataset
-from replay.experimental.scenarios.movielens_wrapper.dataset_jester import JesterBanditDataset

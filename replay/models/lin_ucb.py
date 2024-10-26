@@ -23,8 +23,8 @@ import scipy.sparse as scs
 # Object for interactions with a single arm in a UCB disjoint framework
 class linucb_disjoint_arm:
     def __init__(
-        self, arm_index, d, eps, alpha
-    ):  # in case of lin ucb with disjoint features: d = dimension of user's features solely
+        self, arm_index, d, eps, alpha = 1
+    ):
         # Track arm index
         self.arm_index = arm_index
         # Exploration parameter
@@ -54,7 +54,7 @@ class linucb_disjoint_arm:
 
 # Object for interactions with a single arm in a UCB hybrid framework
 class linucb_hybrid_arm:
-    def __init__(self, arm_index, d, k, eps, alpha):
+    def __init__(self, arm_index, d, k, eps, alpha = 1):
         # Track arm index
         self.arm_index = arm_index
         # Exploration parameter
@@ -268,9 +268,6 @@ class LinUCB(HybridRecommender):
         log = dataset.interactions.toPandas()
         user_features = dataset.query_features.toPandas()
         item_features = dataset.item_features.toPandas()
-        # check that the dataframe contains uer indexes
-        if feature_schema.query_id_column not in user_features.columns:
-            raise ValueError("User indices are missing in user features dataframe")
         self._num_items = item_features.shape[0]
         self._user_dim_size = user_features.shape[1] - 1
         self._item_dim_size = item_features.shape[1] - 1
