@@ -262,6 +262,7 @@ class JesterBanditDataset(BaseRealBanditDataset):
         
         return convert2spark(ratings)
 
+
     def obtain_batch_bandit_feedback(
         self, test_size: float = 0.3, is_timeseries_split: bool = False, n_neg: int = 0
     ) -> Union[BanditFeedback, Tuple[BanditFeedback, BanditFeedback]]:
@@ -280,17 +281,15 @@ class JesterBanditDataset(BaseRealBanditDataset):
                 max_val=1.0,
             )
 
-            # train_spl = TimeSplitter(
-            #     time_threshold=test_size,
-            #     drop_cold_items=False,
-            #     drop_cold_users=False,
-            #     query_column="user_idx",
-            #     item_column="item_idx",
-            # )
+            train_spl = TimeSplitter(
+                time_threshold=test_size,
+                drop_cold_items=False,
+                drop_cold_users=False,
+                query_column="user_idx",
+                item_column="item_idx",
+            )
 
-            train_log, test_log = train_test_split(self.log.toPandas(), test_size=0.3)
-            train_log, test_log = convert2spark(train_log), convert2spark(test_log)
-            print(train_log.count(), test_log.count())
+            train_log, test_log = train_spl.split(self.log)
             
             if n_neg != 0:
                 train_log = self.sample_negatives(train_log.toPandas(), n_neg)
@@ -349,6 +348,7 @@ class JesterBanditDataset(BaseRealBanditDataset):
                 context=self.context,
                 action_context=self.action_context,
             )
+
 
     def sample_bootstrap_bandit_feedback(
         self,
